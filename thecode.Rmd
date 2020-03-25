@@ -1,0 +1,330 @@
+```{r, message = FALSE, warning = FALSE}
+set.seed(1) # To be able to replicate the k-means
+
+library(tidyverse)
+library(cluster)
+library(Rtsne)
+library(seriation)
+library(stargazer)
+
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+What if we used two beta-binomial posterior distributions each for two different "types" of districts (we will determine those by who has higher turnout), to determine turnout for democrats in different cities in fairfax county?
+
+```{r}
+#to_cluster <- read.csv(file.choose())
+
+#to_cluster <- read.csv('2016_Election_Results__Voter_Turnout.csv')
+
+dem <- read.csv('dem.csv')
+rep <- read.csv('rep.csv')
+set.seed(1235)
+
+
+plot(dem$ï..OBJECTID, dem$PERCVOTE)
+plot(rep$ï..OBJECTID, rep$PERCVOTE)
+
+names(dem)[names(dem) == "ï..OBJECTID"] <- "OBJECTID"
+names(rep)[names(rep) == "ï..OBJECTID"] <- "OBJECTID"
+
+myvars <- c("OBJECTID", "REGVOTERS", "TOTBALLOTSLINK", "PERCVOTE")
+dem_edt <- dem[myvars]
+rep_edt <- rep[myvars]
+
+numb <- length(dem_edt[,1])
+#df <- to_cluster %>%
+#  na.omit() %>%
+#  sample_n(243)
+```
+
+```{r}
+
+betabinom_post <- function(N, a, b, numsamp){
+  prior <- rbeta(numsamp, a, b)
+  likelihood <- rbinom(numsamp, N, prior)
+  post <- rbeta(numsamp, a+likelihood, b+N-likelihood)
+  return(post)
+}
+N <- 1000
+ab_m <- matrix(c(0.7, 0.3, 0.3, 0.7),
+               nrow = 2,
+               ncol = 2,
+               byrow=TRUE) #the first row is a democrat city's voting alpha and beta
+
+dem_voter <- rep(0, numb)
+dem_perc <- rep(0, numb)
+err <- rep(0, numb)
+city_id <- rep(0, numb)
+
+for (i in 1:numb){
+  vote_id <- 1 #first row (democrat)
+  if (rep_edt$TOTBALLOTSLINK[i] > dem_edt$TOTBALLOTSLINK[i]){
+    vote_id <- 2
+  }
+  city_id[i] <- vote_id
+  post <- betabinom_post(rep_edt$REGVOTERS[i], ab_m[vote_id ,1], ab_m[vote_id, 2], 1000)
+  dem_perc[i] <- mean(post)
+  dem_voter[i] <- rep_edt$REGVOTERS[i] * dem_perc[i]
+  err[i] <- (dem_voter[i]-dem_edt$TOTBALLOTSLINK[i])/dem_edt$TOTBALLOTSLINK[i]
+}
+
+plot(err)
+mean(err)
+
+```
+
+
+```{r}
+
+get_dem_turnout_error <- function(a_dem, b_dem, a_rep, b_rep){
+  ab_m <- matrix(c(a_dem, b_dem, a_rep, b_rep),
+               nrow = 2,
+               ncol = 2,
+               byrow=TRUE) #the first row is a democrat city's voting alpha and beta
+
+  dem_voter <- rep(0, numb)
+  #dem_perc <- rep(0, numb)
+  err <- rep(0, numb)
+  city_id <- rep(0, numb)
+
+  for (i in 1:numb){
+    vote_id <- 1 #first row (democrat)
+    if (rep_edt$TOTBALLOTSLINK[i] > dem_edt$TOTBALLOTSLINK[i]){
+      vote_id <- 2
+    }
+    city_id[i] <- vote_id
+    post <- betabinom_post(rep_edt$REGVOTERS[i], ab_m[vote_id ,1], ab_m[vote_id, 2], 1000)
+    dem_perc <- mean(post)
+    dem_voter[i] <- rep_edt$REGVOTERS[i] * dem_perc
+    err[i] <- abs(dem_voter[i]-dem_edt$TOTBALLOTSLINK[i])/dem_edt$TOTBALLOTSLINK[i]
+  }
+  return(cbind(city_id, dem_voter, err))
+}
+
+get_dem_turnout_i <- function(i, a_dem, b_dem, a_rep, b_rep){
+  ab_m <- matrix(c(a_dem, b_dem, a_rep, b_rep),
+               nrow = 2,
+               ncol = 2,
+               byrow=TRUE) #the first row is a democrat city's voting alpha and beta
+
+
+    vote_id <- 1 #first row (democrat)
+    if (rep_edt$TOTBALLOTSLINK[i] > dem_edt$TOTBALLOTSLINK[i]){
+      vote_id <- 2
+    }
+    city_id <- vote_id
+    post <- betabinom_post(rep_edt$REGVOTERS[i], ab_m[vote_id ,1], ab_m[vote_id, 2], 1000)
+    dem_perc <- mean(post)
+    dem_voter <- rep_edt$REGVOTERS[i] * dem_perc
+    #err[i] <- (dem_voter[i]-dem_edt$TOTBALLOTSLINK[i])/dem_edt$TOTBALLOTSLINK[i]
+  return(dem_voter)
+}
+```
+
+```{r}
+
+a_dem <- 0.1
+b_dem <- 0.5
+a_rep <- 0.3
+b_rep <- 2
+
+res <- get_dem_turnout_error(a_dem, b_dem, a_rep, b_rep)
+
+plot(res[,1], res[,3])
+
+# It seems like both "republican" and "democrat" types of cities prefer a beta that is higher than its alpha in the prior beta distribution. What this means is that both "types" of cities, as defined by our model, skew towards voting republican
+# We determined what "type" a city has by whether they had higher republican or democrat turnout. This is apparently due to the lack of detail in our model with the beta distribution assumed as our prior and a likelihood determined by a binomial
+# It is clear that we need better models
+```
+
+```{r}
+#idx <- seq(1, numb, 1)
+#df <- data.frame(x = idx, y = dem_edt$TOTBALLOTSLINK)
+
+#a_dem <- 0.7
+#b_dem <- 0.3
+#a_rep <- 0.3
+#b_rep <- 0.7
+
+#result <- nlsLM(y ~ get_dem_turnout_i(x, a_d, b_d, a_r, b_r),
+#              data = df,
+#              start = list(a_d = a_dem, b_d = b_dem, a_r = a_rep, b_r = b_rep),
+#              control = nls.lm.control(ftol=2000))
+
+#control = nls.lm.control(minFactor = 1/50000, tol=0.02)
+```
+
+```{r}
+summary(result)
+```
+
+```{r}
+drop_extreme <- function(x){
+  
+  x <- as.numeric(x)
+  pct_95 <- quantile(x, probs = 0.95, na.rm = TRUE)[[1]]
+  pct_5 <- quantile(x, probs = 0.05, na.rm = TRUE)[[1]]
+  
+  case_when(
+    x < pct_5 ~ pct_5,
+    x > pct_95 ~ pct_95,
+    TRUE ~ x
+  )
+}
+
+gower_standard_cont <- function(x){
+  max <- max(x, na.rm = TRUE)
+  min <- min(x, na.rm = TRUE)
+  
+  x/(max - min)
+} 
+
+quantile(to_cluster$PERCVOTE, probs = 0.95)[[1]]
+
+to_cluster <- df %>% 
+  .[, -1] %>% #filter( != "OBJECTID") %>%
+  mutate_at(c("NAME", "COUNTY", "PRECINCTID", "NAME_1", "REGVOTERS","TOTBALLOTS","PERCVOTE", "INPERSON", "Shape__Area", "Shape__Length"), 
+            drop_extreme) %>%
+  mutate_at(c("COUNTY", "REGVOTERS", "TOTBALLOTS", "Shape__Area", "Shape__Length"), 
+            gower_standard_cont) 
+
+#to_cluster %>%
+  #select(OBJECTID, NAME) %>/%
+  #skimr::skim()
+```
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+```{r, error = FALSE, warning = FALSE, message = FALSE, results = 'asis'}
+#library(poisson)
+
+the_poisson <- glm(INPERSON ~ REGVOTERS + 
+                 #log(PERCVOTE) + 
+                 log(Shape__Area), #+ 
+                 #log(Shape__Length), 
+               data = to_cluster,
+               family = poisson(link = 'log'))
+
+stargazer(the_poisson, title = 'Main Poisson Model')
+
+fit <- predict(the_poisson)
+res <- resid(the_poisson)
+
+myols <- lm(INPERSON ~ REGVOTERS + 
+                 #log(PERCVOTE) + 
+                 log(Shape__Area), #+ 
+                 #log(Shape__Length), 
+               data = to_cluster)
+
+stargazer(myols, title = 'Main OLS Model')
+
+
+```
+
+```{r}
+ggplot(to_cluster) + 
+  aes(y = INPERSON, x = log(Shape__Area)) + 
+  geom_point(col = 'cyan4') + 
+  theme_light()
+
+ggplot(to_cluster) + 
+  aes(y = REGVOTERS, x = INPERSON) +
+  geom_point(col = 'cyan4') + 
+  theme_light()
+```
+
+```{r}
+# install.packages('cluster')
+library(cluster)
+
+my_kmeans <- kmeans(to_cluster[, c('REGVOTERS', 'INPERSON', 'Shape__Length')], 4)
+
+# As Registered Voters increase, so does INPERSON and Shape__Length.
+## Cluster 2 has the highest means; Cluster 4 has the lowest.
+my_kmeans 
+
+clusplot(to_cluster[, c('REGVOTERS', 'INPERSON', 'Shape__Length')],
+         my_kmeans$cluster,
+         main = 'Clusters by REGVOTERS, INPERSON, and Shape__Length')
+```
+
+```{r}
+#daisy(to_cluster[, c('REGVOTERS', 'INPERSON', 'Shape__Length')])
+```
+
+```{r, results = 'asis', warning = FALSE}
+# Modeling by cluster
+
+# Identify which rows belong to which cluster
+to_cluster$cluster <- my_kmeans$cluster
+
+# Estimate Poisson models
+models_subsets_poisson <- to_cluster %>%
+  split(.$cluster) %>%
+  map(~ glm(INPERSON ~ REGVOTERS + log(Shape__Area), .x, family = poisson(link = 'log')))
+
+# Precinct size matters for a couple clusters in Poisson model
+with(models_subsets_poisson, 
+     stargazer(`1`, `2`, `3`, `4`, 
+               title = 'Poisson Subset Models by Cluster'))
+
+# Estimate OLS models
+models_subsets_ols <- to_cluster %>%
+  split(.$cluster) %>%
+  map(~ lm(INPERSON ~ REGVOTERS + log(Shape__Area), .x))
+
+# Precinct size does not matter for OLS
+with(models_subsets_ols, 
+     stargazer(`1`, `2`, `3`, `4`, 
+               title = 'OLS Subset Models by Cluster'))
+```
+
+# Residual Diagnostics
+
+## Poisson
+```{r}
+hist(resid(the_poisson))
+
+poisson_clusters <- paste('Poisson Cluster', 1:4)
+
+par(mfrow = c(2,2))
+for (i in seq_along(models_subsets_poisson)) {
+  
+  hist(resid(models_subsets_poisson[[i]]), main = poisson_clusters[i],
+       xlab = 'Residuals')
+  
+}
+```
+
+## OLS
+```{r}
+hist(resid(myols))
+
+ols_clusters <- paste('OLS Cluster', 1:4)
+
+par(mfrow = c(2,2))
+for (i in seq_along(models_subsets_ols)) {
+  
+  hist(resid(models_subsets_ols[[i]]), main = ols_clusters[i],
+       xlab = 'Residuals')
+  
+}
+```
+
+## Comparing Median Residuals
+```{r}
+median(resid(the_poisson))
+median(resid(myols))
+
+# Median residuals for each poisson cluster model
+map_df(models_subsets_poisson, ~ median(resid(.x)))
+
+# Median residuals for each OLS cluster model
+map_df(models_subsets_ols, ~ median(resid(.x)))
+
+```
